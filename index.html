@@ -104,7 +104,22 @@
 
   <!-- Annotation toolbar: segmented toggle authoritative -->
   <div id="annotationControls" role="toolbar" aria-label="Annotation tools">
-    <!-- Segmented Create/Edit toggle (authoritative mode source) -->
+    
+    <!-- Species search with label (in-toolbar) -->
+    <div class="species-search" aria-label="Species search">
+      <div class="label">Species</div>
+      <div class="input-wrap">
+        <input id="speciesKwInput" type="text" placeholder="Type key (2+ chars) to search species…" aria-label="Species key search" autocomplete="off" />
+        <div id="speciesSuggest" class="species-suggestions" role="listbox" aria-label="Species suggestions" style="display:none"></div>
+      </div>
+      <div class="species-result-wrap empty" title="Selected species">
+        <div id="speciesResult" class="species-result" aria-live="polite"></div>
+        <button id="speciesClearBtn" class="clear-indicator" aria-label="Clear selection" title="Clear selection" style="display:none;">✕</button>
+      </div>
+      <input type="hidden" id="selectedSpeciesKey" value="" />
+    </div>
+	
+	<!-- Segmented Create/Edit toggle (authoritative mode source) -->
     <div id="createEditToggle" class="seg-toggle" role="group" aria-label="Annotation mode" data-mode="create">
       <button type="button" id="toggleCreate" class="seg-option" data-mode="create" aria-pressed="true">Create</button>
       <button type="button" id="toggleEdit" class="seg-option" data-mode="edit" aria-pressed="false">Edit</button>
@@ -140,19 +155,7 @@
 		
 	
 
-    <!-- Species search with label (in-toolbar) -->
-    <div class="species-search" aria-label="Species search">
-      <div class="label">Species</div>
-      <div class="input-wrap">
-        <input id="speciesKwInput" type="text" placeholder="Type key (2+ chars) to search species…" aria-label="Species key search" autocomplete="off" />
-        <div id="speciesSuggest" class="species-suggestions" role="listbox" aria-label="Species suggestions" style="display:none"></div>
-      </div>
-      <div class="species-result-wrap empty" title="Selected species">
-        <div id="speciesResult" class="species-result" aria-live="polite"></div>
-        <button id="speciesClearBtn" class="clear-indicator" aria-label="Clear selection" title="Clear selection" style="display:none;">✕</button>
-      </div>
-      <input type="hidden" id="selectedSpeciesKey" value="" />
-    </div>
+
 
     <!-- Metadata -->
     <button id="metaOpenBtn" type="button" title="Metadata" aria-label="Open metadata form" class="meta-open-btn" disabled>
@@ -179,8 +182,6 @@
 	
 	
   </div>
-
-  <div id="info">Ready.</div>
 
   <script src="species-data.js"></script>
 
