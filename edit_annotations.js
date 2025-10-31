@@ -82,6 +82,17 @@
     return { pxPerSec, imageHeight, ymaxHz, axisLeft };
   }
 
+  // Authoritative duration getter (used for clamps)
+  function getDurationSec() {
+    if (typeof globalThis._spectroDuration === 'number' && isFinite(globalThis._spectroDuration)) return globalThis._spectroDuration;
+    if (globalThis._spectroAudioBuffer && typeof globalThis._spectroAudioBuffer.duration === 'number' && isFinite(globalThis._spectroAudioBuffer.duration)) {
+      return globalThis._spectroAudioBuffer.duration;
+    }
+    const audio = document.querySelector('audio');
+    if (audio && isFinite(audio.duration)) return audio.duration;
+    return null;
+  }
+
   // Resize highlight & pointer layers
   function resizeLayers() {
     const viewWidth = Math.max(1, scrollArea.clientWidth);
@@ -271,10 +282,10 @@
   function commitEditSessionAndEnd() {
     if (!editSession) return;
     const w = editSession.working;
-    const duration = globalThis._spectroDuration || (globalThis._spectroAudioBuffer ? globalThis._spectroAudioBuffer.duration : null);
+    const duration = getDurationSec();
     const ymax = (typeof globalThis._spectroYMax === 'number') ? globalThis._spectroYMax : (globalThis._spectroSampleRate ? globalThis._spectroSampleRate / 2 : 22050);
 
-    if (duration != null) {
+    if (Number.isFinite(duration)) {
       w.beginTime = Math.max(0, Math.min(duration, w.beginTime));
       w.endTime = Math.max(0, Math.min(duration, w.endTime));
     } else {
@@ -385,7 +396,18 @@
     const localY = ev.clientY - rect.top;
     const { pxPerSec, imageHeight, ymaxHz } = getMapping();
     const secsPerPx = 1 / Math.max(1e-9, pxPerSec);
-    const tAtX = (localX + Math.round(scrollArea.scrollLeft || 0)) * secsPerPx;
+
+    // Compute raw time at X, then clamp to [0, duration] so editing cannot push times out of file bounds
+    let tAtX = (localX + Math.round(scrollArea.scrollLeft || 0)) * secsPerPx;
+    const duration = getDurationSec();
+    if (Number.isFinite(duration)) {
+      // clamp into [0, duration]
+      if (tAtX < 0) tAtX = 0;
+      if (tAtX > duration) tAtX = duration;
+    } else {
+      if (tAtX < 0) tAtX = 0;
+    }
+
     const freqAtY = Math.max(0, Math.min(ymaxHz, (1 - (localY / imageHeight)) * ymaxHz));
     const w = editSession.working;
 
