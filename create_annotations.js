@@ -180,6 +180,14 @@
     }
   })();
 
+  // Helper: authoritative duration getter
+  function getDurationSec() {
+    if (typeof globalThis._spectroDuration === 'number' && isFinite(globalThis._spectroDuration)) return globalThis._spectroDuration;
+    const audio = document.querySelector('audio');
+    if (audio && isFinite(audio.duration)) return audio.duration;
+    return Infinity;
+  }
+
   // Resize overlay to match spectrogram image region
   function resizeAnnotationOverlay() {
     const viewWidth = Math.max(1, scrollArea.clientWidth);
@@ -248,10 +256,15 @@
     const pxPerSec = (globalThis._spectroMap && typeof globalThis._spectroMap.pxPerSec === 'function') ? globalThis._spectroMap.pxPerSec() : (globalThis._spectroPxPerSec || 1);
     const imageHeight = globalThis._spectroImageHeight || (annotationOverlay.clientHeight || 100);
     const ymaxHz = globalThis._spectroYMax || (globalThis._spectroSampleRate ? globalThis._spectroSampleRate / 2 : 22050);
+    const duration = getDurationSec();
+    const fullImagePx = (duration === Infinity) ? Infinity : Math.round(duration * pxPerSec);
 
     annotations.forEach(a => {
-      const x1 = (a.beginTime * pxPerSec) - Math.round(scrollArea.scrollLeft || 0);
-      const x2 = (a.endTime * pxPerSec) - Math.round(scrollArea.scrollLeft || 0);
+      // clamp persisted annotations on render so stale or invalid entries don't draw past edge
+      const beginClamped = Math.max(0, Math.min(a.beginTime, duration));
+      const endClamped = Math.max(beginClamped, Math.min(a.endTime, duration));
+      const x1 = (beginClamped * pxPerSec) - Math.round(scrollArea.scrollLeft || 0);
+      const x2 = (endClamped * pxPerSec) - Math.round(scrollArea.scrollLeft || 0);
       const t1 = 1 - (a.highFreq / ymaxHz);
       const t2 = 1 - (a.lowFreq / ymaxHz);
       const y1 = t1 * imageHeight;
@@ -261,8 +274,11 @@
 
     if (pending) {
       const curPxPerSec = pending.pxPerSec || pxPerSec;
-      const x1 = (Math.min(pending.startTime, pending.currentTime) * curPxPerSec) - Math.round(scrollArea.scrollLeft || 0);
-      const x2 = (Math.max(pending.startTime, pending.currentTime) * curPxPerSec) - Math.round(scrollArea.scrollLeft || 0);
+      // clamp pending currentTime to duration for visual feedback
+      const clampedCurrent = Math.min(pending.currentTime, duration);
+      const clampedStart = Math.min(pending.startTime, duration);
+      const x1 = (Math.min(clampedStart, clampedCurrent) * curPxPerSec) - Math.round(scrollArea.scrollLeft || 0);
+      const x2 = (Math.max(clampedStart, clampedCurrent) * curPxPerSec) - Math.round(scrollArea.scrollLeft || 0);
 
       const low = Math.min(pending.startFreq, pending.currentFreq);
       const high = Math.max(pending.startFreq, pending.currentFreq);
@@ -513,7 +529,7 @@
   function commitPending() {
     if (!pending) return;
     const begin = Math.min(pending.startTime, pending.currentTime);
-    const end = Math.max(pending.startTime, pending.currentTime);
+    let end = Math.max(pending.startTime, pending.currentTime);
     const low = Math.min(pending.startFreq, pending.currentFreq);
     const high = Math.max(pending.startFreq, pending.currentFreq);
 
@@ -521,6 +537,18 @@
       pending = null;
       renderAllAnnotations();
       return;
+    }
+
+    const duration = getDurationSec();
+
+    // Final authoritative clamp: end <= duration
+    if (end > duration) end = duration;
+
+    // Enforce minimum duration (10ms) if clamping caused start >= end
+    const MIN_DUR = 0.01;
+    let startClamped = begin;
+    if (startClamped >= end) {
+      startClamped = Math.max(0, end - MIN_DUR);
     }
 
     let speciesVal = '';
@@ -540,7 +568,7 @@
 
     const ann = {
       id: 'a' + String(nextId++).padStart(4, '0'),
-      beginTime: r4(begin),
+      beginTime: r4(startClamped),
       endTime: r4(end),
       lowFreq: r4(low),
       highFreq: r4(high),
@@ -588,7 +616,9 @@
     if (currentMode() !== 'create') return;
     if (!pointerDown || !pending) return;
     const cur = clientToTimeAndFreq_local(ev.clientX, ev.clientY);
-    pending.currentTime = cur.timeSec;
+    // clamp visual currentTime to duration to avoid drawing past end
+    const duration = getDurationSec();
+    pending.currentTime = Math.min(cur.timeSec, duration);
     pending.currentFreq = cur.freqHz;
     pending.pxPerSec = cur.pxPerSec;
     renderAllAnnotations();
@@ -599,6 +629,7 @@
     if (!pointerDown) return;
     pointerDown = false;
     try { ev.target.releasePointerCapture && ev.target.releasePointerCapture(ev.pointerId); } catch (e) {}
+    // do not auto-commit on pointer up; commit is via Enter/context/auxclick per current UX
     renderAllAnnotations();
   }
 
