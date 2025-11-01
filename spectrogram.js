@@ -3,6 +3,9 @@
 // Behavior: when Generate is pressed we capture the currently visible time (at press).
 // After generate/re-render completes, the captured time is positioned at the left edge
 // of the viewport so that the view's leftmost time equals the captured time.
+// This version: moved wait-overlay control into this file, installs listeners immediately,
+// dispatches completion event and hides overlay deterministically when visible content is ready,
+// and includes a shorter poll fallback.
 
 (function(){
   function hannWindow(N){ const w=new Float32Array(N); for(let n=0;n<N;n++) w[n]=0.5*(1-Math.cos(2*Math.PI*n/(N-1))); return w; }
@@ -59,7 +62,6 @@
   globalThis._spectroImageWidth = globalThis._spectroImageWidth || 800;
   globalThis._spectroImageHeight = globalThis._spectroImageHeight || IMAGE_H;
   globalThis._spectroYMax = globalThis._spectroYMax || (globalThis._spectroSampleRate/2);
-  // axisLeft remains the axis column width for overlays and ticks; do not use it to shift image pixels
   globalThis._spectroAxisLeft = (axisCanvas && typeof axisCanvas.clientWidth === 'number') ? Math.round(axisCanvas.clientWidth) : 70;
 
   // mapping helpers (single authoritative mapping)
@@ -71,6 +73,41 @@
   function pxToSec(px) { return px / Math.max(1, effectivePxPerSec()); }
   function secToPx(sec) { return Math.round(sec * Math.max(1, effectivePxPerSec())); }
   globalThis._spectroMap = { pxToSec, secToPx, pxPerSec: () => effectivePxPerSec() };
+
+  // --- wait-overlay control moved into spectrogram.js (index.html keeps markup & styles) ---
+  (function () {
+    function _els() {
+      return {
+        overlay: document.getElementById('waitOverlay'),
+        meta: document.getElementById('waitOverlayMeta'),
+        eta: document.getElementById('waitOverlayETA')
+      };
+    }
+    function showWaitOverlay(opts = {}) {
+      const { overlay, meta, eta } = _els();
+      if (!overlay) return;
+      if (opts.etaText) {
+        if (eta) eta.textContent = opts.etaText;
+        if (meta) meta.style.display = 'block';
+      } else if (meta) {
+        meta.style.display = 'none';
+      }
+      overlay.style.display = 'flex';
+      overlay.setAttribute('aria-hidden', 'false');
+      try { document.documentElement.style.overflow = 'hidden'; } catch (e) {}
+    }
+    function hideWaitOverlay() {
+      const { overlay, meta } = _els();
+      if (!overlay) return;
+      overlay.style.display = 'none';
+      overlay.setAttribute('aria-hidden', 'true');
+      try { document.documentElement.style.overflow = ''; } catch (e) {}
+      if (meta) meta.style.display = 'none';
+    }
+    window.__spectroWait = window.__spectroWait || {};
+    window.__spectroWait.show = showWaitOverlay;
+    window.__spectroWait.hide = hideWaitOverlay;
+  })();
 
   // placeholders
   drawAxisPlaceholder();
@@ -118,7 +155,6 @@
     axisCtx.clearRect(0, 0, axisCanvas.width, axisCanvas.height);
     axisCtx.fillStyle = '#000';
     axisCtx.fillRect(0, 0, axisCanvas.width, axisCanvas.height);
-    // draw spectrogram background area in axis canvas for readability near axis right edge
     axisCtx.fillStyle = '#111';
     axisCtx.fillRect(0, AXIS_TOP, axisCanvas.width, imgH);
 
@@ -134,23 +170,14 @@
     const firstTick = Math.ceil(startSec / step) * step;
     axisCtx.textAlign = 'center'; axisCtx.textBaseline = 'top';
 
-    // We draw tick lines into the axis canvas area at positions relative to the viewport.
-    // Compute visibleStartSec relative to full image (passed in).
     for (let t = firstTick; t <= endSec + 1e-9; t += step) {
-      const xPxFloat = (t - visibleStartSec) * pxPerSec; // css px relative to viewport left
-      const xOnAxisCanvas = Math.round(axisCanvas.clientWidth + xPxFloat); // axisCanvas is left column, so ticks visually align at axisRight + xPx
-      // vertical tick inside axis canvas only if it intersects the small right strip we keep for labels; we will always draw minor marker near axis right edge
+      const xPxFloat = (t - visibleStartSec) * pxPerSec;
       const markerX = axisCanvas.clientWidth - 6;
-      axisCtx.beginPath(); axisCtx.moveTo(markerX + 0.5, AXIS_TOP + Math.round((xPxFloat/Math.max(1, imgW))*0) ); // small line
-      axisCtx.lineTo(markerX + 0.5, AXIS_TOP + 8);
-      axisCtx.stroke();
-      // Show label vertically centered on axis canvas near same Y as tick area
+      axisCtx.beginPath(); axisCtx.moveTo(markerX + 0.5, AXIS_TOP); axisCtx.lineTo(markerX + 0.5, AXIS_TOP + 8); axisCtx.stroke();
       const label = (t >= 60) ? ((t / 60).toFixed(0) + 'm') : (t.toFixed((step < 1) ? 1 : 0) + 's');
-      // put label offset to the right of axis canvas content area
       axisCtx.fillText(label, axisCanvas.clientWidth / 2, AXIS_TOP + imgH + 2);
     }
 
-    // draw frequency ticks and label on axis left column
     drawYAxis(sampleRate, imgH, globalThis._spectroYMax);
   }
 
@@ -249,7 +276,6 @@
     const imageW = Math.max(1, numFrames * pxpf);
     const imageH = IMAGE_H;
     const dpr = window.devicePixelRatio || 1;
-    // crucial: canvas width is image width only (no left axis margin)
     const cssWidth = imageW;
     const cssHeight = AXIS_TOP + imageH + AXIS_BOTTOM;
 
@@ -261,7 +287,6 @@
 
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     ctx.clearRect(0, 0, cssWidth, cssHeight);
-    // draw background for the image area at x = 0
     ctx.fillStyle = '#111'; ctx.fillRect(0, AXIS_TOP, imageW, imageH);
 
     const lut = buildLUT(cmap);
@@ -269,6 +294,10 @@
     const tileW = Math.min(MAX_TILE_W, imageW);
     const tiles = [];
     const gain = Math.max(0.0001, parseFloat(gainInput && gainInput.value) || 1);
+
+    // We'll draw tiles; after the first tile(s) that fill visible left region are drawn,
+    // dispatch completion and hide overlay immediately so UI can proceed.
+    let firstTilePainted = false;
 
     for (let tileX = 0, tileIndex = 0; tileX < imageW; tileX += tileW, tileIndex++){
       const w = Math.min(tileW, imageW - tileX);
@@ -294,8 +323,18 @@
 
       try {
         const tileImage = new ImageData(tilePixels, w, imageH);
-        // draw at tileX (flush to left), not offset by axis column
         ctx.putImageData(tileImage, tileX, AXIS_TOP);
+
+        // mark that at least one tile has been painted
+        if (!firstTilePainted) {
+          firstTilePainted = true;
+          // visible content is now present; inform listeners and hide overlay immediately (defensive)
+          try {
+            const meta = { duration: (length / sr), pxPerSec: ((imageW / Math.max(1, length/sr)) || (framesPerSec * pxpf)), imageHeight: imageH, sampleRate: sr, cmap: cmap, fileName: file.name };
+            try { window.dispatchEvent(new CustomEvent('spectrogram-generated', { detail: { meta } })); } catch (e) {}
+          } catch (e) {}
+          try { window.__spectroWait && window.__spectroWait.hide(); } catch (e) {}
+        }
 
         const tcanvas = document.createElement('canvas');
         tcanvas.style.width = w + 'px';
@@ -325,7 +364,6 @@
     globalThis._spectroFramesPerSec = framesPerSec;
     globalThis._spectroPxPerFrame = pxpf;
     globalThis._spectroImageWidth = imageW;
-    // keep axisLeft as axis column width for overlays (unchanged)
     globalThis._spectroAxisLeft = globalThis._spectroAxisLeft || ((axisCanvas && typeof axisCanvas.clientWidth === 'number') ? Math.round(axisCanvas.clientWidth) : 70);
     globalThis._spectroSampleRate = sr;
     globalThis._spectroNumFrames = numFrames;
@@ -347,6 +385,13 @@
     alignCanvasLeft();
     drawYAxis(sr, imageH, globalThis._spectroYMax);
     updateXTicksFromScroll();
+
+    // Final dispatch/hide to cover any remaining edge cases
+    try {
+      const meta = { duration: globalThis._spectroDuration, pxPerSec: globalThis._spectroPxPerSec, imageHeight: globalThis._spectroImageHeight, sampleRate: globalThis._spectroSampleRate, cmap: cmap, fileName: file.name };
+      try { window.dispatchEvent(new CustomEvent('spectrogram-generated', { detail: { meta } })); } catch (e) {}
+    } catch (e) {}
+    try { window.__spectroWait && window.__spectroWait.hide(); } catch (e) {}
   }
 
   // re-render from spectra (ymax in Hz)
@@ -373,6 +418,8 @@
 
     const MAX_TILE_W = 8192;
     const effectiveTileW = Math.min(MAX_TILE_W, imageW);
+
+    let firstTilePainted = false;
 
     for (let tileX = 0, tileIndex = 0; tileX < imageW; tileX += effectiveTileW, tileIndex++){
       const w = Math.min(effectiveTileW, imageW - tileX);
@@ -409,8 +456,13 @@
 
       try {
         const tileImage = new ImageData(tilePixels, w, imageH);
-        // draw flush to left
         ctx.putImageData(tileImage, tileX, AXIS_TOP);
+
+        if (!firstTilePainted) {
+          firstTilePainted = true;
+          try { window.dispatchEvent(new CustomEvent('spectrogram-generated', { detail: { meta: { ymax: ymaxClamped } } })); } catch(e){}
+          try { window.__spectroWait && window.__spectroWait.hide(); } catch(e){}
+        }
       } catch(e){
         console.error('paint tile failed', e);
       }
@@ -422,6 +474,9 @@
     alignCanvasLeft();
     drawYAxis(sr, imageH, ymaxClamped);
     updateXTicksFromScroll();
+
+    try { window.dispatchEvent(new CustomEvent('spectrogram-generated', { detail: { meta: { ymax: ymaxClamped } } })); } catch(e){}
+    try { window.__spectroWait && window.__spectroWait.hide(); } catch(e){}
   }
 
   // reset playback helpers (pause/seek to 0) but we will align view to captured start time later
@@ -499,6 +554,7 @@
 
   // Generate handler: capture current left-edge time at press and after processing align that time to left edge
   if (goBtn) {
+    // Strong integration: install finish-listener immediately on click, show overlay, and rely on generator to hide quickly when visible pixels are painted.
     goBtn.addEventListener('click', async ()=>{
       const f = fileInput && fileInput.files && fileInput.files[0];
       if (!f) { alert('Choose an audio file'); return; }
@@ -513,9 +569,16 @@
 
       // Capture the currently visible left-edge time (the time at scrollLeft) at the moment Generate is pressed.
       const currentScrollPx = (scrollArea && typeof scrollArea.scrollLeft === 'number') ? scrollArea.scrollLeft : 0;
-      // Use authoritative pxPerSec if present, otherwise fallback to previous frame-based product
       const prevPxPerSec = effectivePxPerSec();
-      const capturedLeftTimeSec = currentScrollPx / Math.max(1, prevPxPerSec); // time at left edge when pressing Generate
+      const capturedLeftTimeSec = currentScrollPx / Math.max(1, prevPxPerSec);
+
+      // install finish listener immediately (no race)
+      const onceGen = () => { try { window.__spectroWait && window.__spectroWait.hide(); } catch(e){} };
+      window.addEventListener('spectrogram-generated', onceGen, { once: true });
+
+      // show overlay now and yield a single tick to allow paint
+      try { window.__spectroWait && window.__spectroWait.show({ etaText: 'Generating...' }); } catch(e) {}
+      await new Promise(r => setTimeout(r, 20));
 
       // block during playback if required
       if (typeof globalThis._playbackScrollJump === 'object' && globalThis._playbackScrollJump.status) {
@@ -582,6 +645,10 @@
         }
       } catch (e) {
         console.error(e);
+      } finally {
+        // ensure overlay hidden if something unexpected skipped the generation path
+        try { window.__spectroWait && window.__spectroWait.hide(); } catch (e) {}
+        try { window.removeEventListener('spectrogram-generated', onceGen); } catch(e){}
       }
     });
   }
