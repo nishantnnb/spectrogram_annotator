@@ -213,3 +213,43 @@ button[data-role="save"] {
   .species-result { display:none; } /* compact mobile behavior */
 }
 
+/* wait overlay styles */
+#waitOverlay {
+  position: fixed;
+  inset: 0;
+  display: none;
+  align-items: center;
+  justify-content: center;
+  background: rgba(4,6,12,0.55);
+  z-index: 20000;
+  -webkit-backdrop-filter: blur(4px);
+  backdrop-filter: blur(4px);
+  color: #fff;
+  font-family: system-ui, -apple-system, "Segoe UI", Roboto, Arial;
+}
+#waitOverlay .panel {
+  display: flex;
+  gap: 18px;
+  align-items: center;
+  padding: 18px 20px;
+  background: linear-gradient(180deg, rgba(255,255,255,0.03), rgba(255,255,255,0.01));
+  border-radius: 10px;
+  box-shadow: 0 6px 30px rgba(0,0,0,0.55);
+  min-width: 320px;
+  max-width: 80%;
+}
+#waitOverlay .spinner {
+  width: 48px;
+  height: 48px;
+  border-radius: 50%;
+  border: 4px solid rgba(255,255,255,0.12);
+  border-top-color: #1ea7ff;
+  animation: waitspin 1s linear infinite;
+  flex: 0 0 48px;
+}
+@keyframes waitspin { to { transform: rotate(360deg); } }
+#waitOverlay .text { display: flex; flex-direction: column; gap: 6px; }
+#waitOverlay .title { font-weight: 600; font-size: 15px; color: #e7f6ff; }
+#waitOverlay .msg { font-size: 13px; color: #cfeeff; opacity: 0.95; }
+#waitOverlay .meta { font-size: 12px; color: #9fc8e6; opacity: 0.9; }
+
