@@ -136,6 +136,9 @@
   let nextId = 1;
   let onChangeCb = null;
 
+  // track last pointer id so we can release pointer capture if cancelling
+  let __lastPointerId;
+
   function r4(v) { return Number((+v).toFixed(4)); }
 
   // Toggle wrapper (authoritative mode source)
@@ -586,6 +589,35 @@
     renderAllAnnotations();
   }
 
+  // --- cancel API and event listener (new) ---
+  function cancelPendingCreate() {
+    try {
+      // Release pointer capture if held (best-effort)
+      try {
+        if (pointerDown && typeof __lastPointerId !== 'undefined' && spectrogramCanvas && spectrogramCanvas.releasePointerCapture) {
+          try { spectrogramCanvas.releasePointerCapture(__lastPointerId); } catch (e) {}
+        }
+      } catch (e) {}
+
+      // Reset state and visuals
+      pointerDown = false;
+      pending = null;
+      renderAllAnnotations();
+
+      // If any temporary preview DOM exists, remove it (defensive)
+      const temp = document.getElementById('createPreviewLayer');
+      if (temp) temp.remove();
+
+      // clear stored pointer id
+      try { __lastPointerId = undefined; } catch (e) {}
+    } catch (err) {
+      console.warn('cancelPendingCreate error', err);
+    }
+  }
+  // Export API and listen for broadcast
+  window.__cancelPendingCreate = cancelPendingCreate;
+  window.addEventListener('cancel-pending-create', (ev) => { cancelPendingCreate(); }, false);
+
   // pointer & keyboard handlers; honor toggle when present
   let pointerDown = false;
   function currentMode() {
@@ -600,6 +632,7 @@
     const imageHeight = globalThis._spectroImageHeight || (spectrogramCanvas.clientHeight - AXIS_TOP - 44);
     if (yInCanvas < AXIS_TOP || yInCanvas > AXIS_TOP + imageHeight) return;
     pointerDown = true;
+    __lastPointerId = ev.pointerId;
     const start = clientToTimeAndFreq_local(ev.clientX, ev.clientY);
     pending = {
       startTime: start.timeSec,
@@ -629,6 +662,7 @@
     if (!pointerDown) return;
     pointerDown = false;
     try { ev.target.releasePointerCapture && ev.target.releasePointerCapture(ev.pointerId); } catch (e) {}
+    __lastPointerId = undefined;
     // do not auto-commit on pointer up; commit is via Enter/context/auxclick per current UX
     renderAllAnnotations();
   }
