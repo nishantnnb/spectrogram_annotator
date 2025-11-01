@@ -57,7 +57,7 @@
   let isPlaying = false;
   let rafId = null;
   let startInProgress = false;
-  let reachedEOF = false; // NEW: tracks natural EOF
+  let reachedEOF = false; // tracks natural EOF
   const EPS = 1e-6;
   const dpr = window.devicePixelRatio || 1;
   const SAMPLE_RATE = globalThis._spectroSampleRate || 44100;
@@ -96,6 +96,32 @@
   }
 
   function clamp(v, a, b) { return Math.max(a, Math.min(b, v)); }
+
+  // helper: format seconds as M:SS (zero-padded seconds)
+  function formatMMSS(t) {
+    const total = Math.max(0, Math.round(t));
+    const m = Math.floor(total / 60);
+    const s = total % 60;
+    return m + ':' + (s < 10 ? '0' + s : s);
+  }
+
+  // Axis readiness: do not draw or show axis/footer until spectrogram ready
+  let axisReady = false;
+  function hideAxisCanvases() {
+    if (xAxisCanvas) xAxisCanvas.style.display = 'none';
+    if (footer) footer.style.display = 'none';
+  }
+  function showAxisCanvases() {
+    if (xAxisCanvas) xAxisCanvas.style.display = '';
+    if (footer) footer.style.display = '';
+  }
+  function isSpectroReady() {
+    const s = spectro();
+    return Array.isArray(s.tiles) && s.tiles.length && s.pxPerSec && s.imageWidth;
+  }
+
+  // Start hidden
+  hideAxisCanvases();
 
   function resizeOverlayToSpectrogram() {
     const s = spectro();
@@ -139,11 +165,12 @@
   }
 
   function renderXAxisTicks() {
+    if (!axisReady) return;
     const s = spectro();
     const viewWidth = Math.max(1, scrollArea.clientWidth);
     const leftCol = Math.round(scrollArea.scrollLeft || 0);
-    const leftTime = leftCol / Math.max(1, s.pxPerSec || 1);
     const pxPerSec = s.pxPerSec || 1;
+    const leftTime = leftCol / Math.max(1, pxPerSec);
 
     xAxisCtx.clearRect(0, 0, xAxisCanvas.width / dpr, xAxisCanvas.height / dpr);
     xAxisCtx.fillStyle = '#111';
@@ -168,12 +195,13 @@
       xAxisCtx.moveTo(cx + 0.5, 0);
       xAxisCtx.lineTo(cx + 0.5, 8);
       xAxisCtx.stroke();
-      const label = (t >= 60) ? ((t / 60).toFixed(0) + 'm') : (t.toFixed((step < 1) ? 1 : 0) + 's');
+      const label = formatMMSS(t);
       xAxisCtx.fillText(label, cx, 10);
     }
   }
 
   function drawTimeFooter(leftTime) {
+    if (!axisReady) return;
     const s = spectro();
     const W = Math.max(1, scrollArea.clientWidth);
     const H = 28;
@@ -205,7 +233,7 @@
       fCtx.moveTo(cx + 0.5, 0);
       fCtx.lineTo(cx + 0.5, 8);
       fCtx.stroke();
-      const label = (t >= 60) ? ((t / 60).toFixed(0) + 'm') : (t.toFixed((step < 1) ? 1 : 0) + 's');
+      const label = formatMMSS(t);
       fCtx.fillText(label, cx, 10);
     }
   }
@@ -374,9 +402,12 @@
     // automatically reset scroll to leftmost so visual context begins at start.
     if (reachedEOF && pausedAt <= EPS) {
       scrollArea.scrollLeft = 0;
-      resizeOverlayToSpectrogram();
-      renderXAxisTicks();
-      drawTimeFooter(0);
+      // Only resize/draw if axis is ready; if not ready, we'll show/draw when spectrogram completes.
+      if (axisReady) {
+        resizeOverlayToSpectrogram();
+        renderXAxisTicks();
+        drawTimeFooter(0);
+      }
       // clear flag so subsequent resumes behave normally
       reachedEOF = false;
     }
@@ -387,7 +418,8 @@
       audioCtx = new CtxClass();
     }
 
-    resizeOverlayToSpectrogram();
+    // If spectrogram not ready we still must allow audio playback, but visual overlays remain disabled until ready.
+    if (axisReady) resizeOverlayToSpectrogram();
 
     if (pausedAt >= s.duration - EPS) pausedAt = 0;
 
@@ -434,9 +466,11 @@
       if (globalX < currentScroll) {
         const newScroll = Math.max(0, Math.min(maxScroll, globalX));
         scrollArea.scrollLeft = newScroll;
-        resizeOverlayToSpectrogram();
-        renderXAxisTicks();
-        drawTimeFooter(newScroll / Math.max(1, s2.pxPerSec || 1));
+        if (axisReady) {
+          resizeOverlayToSpectrogram();
+          renderXAxisTicks();
+          drawTimeFooter(newScroll / Math.max(1, s2.pxPerSec || 1));
+        }
       }
     } catch (e) { /* non-fatal */ }
 
@@ -464,15 +498,18 @@
       await pauseNow();
       return;
     }
-    resizeOverlayToSpectrogram();
+    // Only resize/draw if axis is ready
+    if (axisReady) resizeOverlayToSpectrogram();
     const s = spectro();
 
     // If previous playback ended at EOF, and user presses play (pausedAt ≈ 0), auto-scroll to start.
     if (reachedEOF && pausedAt <= EPS) {
       scrollArea.scrollLeft = 0;
-      resizeOverlayToSpectrogram();
-      renderXAxisTicks();
-      drawTimeFooter(0);
+      if (axisReady) {
+        resizeOverlayToSpectrogram();
+        renderXAxisTicks();
+        drawTimeFooter(0);
+      }
       reachedEOF = false;
     }
 
@@ -480,9 +517,11 @@
     const globalX = Math.round(pausedAt * (s.pxPerSec || 1));
     const currentScroll = Math.round(scrollArea.scrollLeft || 0);
     const screenX = globalX - currentScroll;
-    drawPlayheadAt(screenX);
-    renderXAxisTicks();
-    drawTimeFooter(currentScroll / Math.max(1, s.pxPerSec || 1));
+    if (axisReady) {
+      drawPlayheadAt(screenX);
+      renderXAxisTicks();
+      drawTimeFooter(currentScroll / Math.max(1, s.pxPerSec || 1));
+    }
 
     // Disable controls now that playback will start
     setControlsWhilePlaying(true);
@@ -500,6 +539,8 @@
 
     xAxisCanvas.addEventListener('pointerdown', (ev) => {
       ev.preventDefault();
+      // If axis not ready, ignore pointer interactions
+      if (!axisReady) return;
       xAxisCanvas.setPointerCapture(ev.pointerId);
       isPointerDown = true;
       lastClientX = ev.clientX;
@@ -509,6 +550,7 @@
 
     xAxisCanvas.addEventListener('pointermove', (ev) => {
       ev.preventDefault();
+      if (!axisReady) return;
       if (isPointerDown) xAxisCanvas.style.cursor = 'col-resize';
       lastClientX = ev.clientX;
       if (isPointerDown) {
@@ -520,6 +562,7 @@
 
     xAxisCanvas.addEventListener('pointerup', async (ev) => {
       ev.preventDefault();
+      if (!axisReady) return;
       xAxisCanvas.releasePointerCapture(ev.pointerId);
       isPointerDown = false;
       xAxisCanvas.style.cursor = 'pointer';
@@ -535,6 +578,7 @@
 
     xAxisCanvas.addEventListener('click', async (ev) => {
       ev.preventDefault();
+      if (!axisReady) return;
       const clickedTime = clientXToTime_onAxis(ev.clientX);
       const commitTime = quantizeToSample(clickedTime);
 
@@ -602,6 +646,7 @@
     }
 
     xAxisCanvas.addEventListener('pointercancel', async (ev) => {
+      if (!axisReady) return;
       if (!isPointerDown) return;
       isPointerDown = false;
       xAxisCanvas.releasePointerCapture(ev.pointerId);
@@ -615,9 +660,11 @@
   // Sync ticks on manual scroll
   let scrollTickRAF = null;
   scrollArea.addEventListener('scroll', () => {
-    resizeOverlayToSpectrogram();
+    // resize overlay regardless (overlay sizing is harmless), but only draw axis when ready
+    if (axisReady) resizeOverlayToSpectrogram();
     if (scrollTickRAF) cancelAnimationFrame(scrollTickRAF);
     scrollTickRAF = requestAnimationFrame(() => {
+      if (!axisReady) return;
       renderXAxisTicks();
       const s = spectro();
       drawTimeFooter((scrollArea.scrollLeft || 0) / Math.max(1, s.pxPerSec || 1));
@@ -628,27 +675,53 @@
   globalThis._playbackScrollJump = {
     start: async () => { if (!isPlaying) await startPlayback(); },
     pause: async () => { if (isPlaying) await pauseNow(); },
-    stopAndReset: () => { stopAndCleanup(true); scrollArea.scrollLeft = 0; resizeOverlayToSpectrogram(); drawPlayheadAt(0); renderXAxisTicks(); drawTimeFooter(0); reachedEOF = false; },
+    stopAndReset: () => {
+      stopAndCleanup(true);
+      scrollArea.scrollLeft = 0;
+      // only draw if axis is ready
+      if (axisReady) {
+        resizeOverlayToSpectrogram();
+        drawPlayheadAt(0);
+        renderXAxisTicks();
+        drawTimeFooter(0);
+      }
+      reachedEOF = false;
+    },
     status: () => ({ playing: isPlaying, pausedAt, playbackMeta, audioState: audioCtx ? audioCtx.state : 'none' })
   };
 
-  // initial draw
-  setTimeout(() => {
-    const s = spectro();
-    if (s.tiles && s.tiles.length) {
-      resizeOverlayToSpectrogram();
-      drawPlayheadAt(0);
-      renderXAxisTicks();
-      drawTimeFooter(0);
-      info && (info.textContent = 'Spectrogram ready. Click the X axis to seek and play.');
-    } else {
-      info && (info.textContent = 'No tiles found. Generate spectrogram first.');
-    }
-    // Ensure controls are enabled initially
+  // Called when spectrogram generator finishes and spectro() becomes ready.
+  function onSpectrogramReady() {
+    if (axisReady) return;
+    axisReady = true;
+    showAxisCanvases();
+    resizeOverlayToSpectrogram();
+    drawPlayheadAt(0);
+    renderXAxisTicks();
+    drawTimeFooter(0);
+    info && (info.textContent = 'Spectrogram ready. Click the X axis to seek and play.');
+    // Ensure controls are enabled now that axis exists
     setControlsWhilePlaying(false);
-  }, 120);
+  }
+
+  // initial check and polite polling until spectrogram ready
+  (function waitForSpectroThenInit() {
+    const s = spectro();
+    if (isSpectroReady()) {
+      onSpectrogramReady();
+      return;
+    }
+    info && (info.textContent = 'No tiles found. Waiting for spectrogram...');
+    const pollId = setInterval(() => {
+      if (isSpectroReady()) {
+        clearInterval(pollId);
+        onSpectrogramReady();
+      }
+    }, 120);
+  })();
 
   window.addEventListener('resize', () => {
+    if (!axisReady) return;
     resizeOverlayToSpectrogram();
     renderXAxisTicks();
   });
