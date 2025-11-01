@@ -95,6 +95,20 @@
     
   </div>
 
+
+	<!-- wait overlay (keep minimal markup in index.html) -->
+	<div id="waitOverlay" role="status" aria-live="polite" aria-hidden="true">
+	  <div class="panel" role="presentation">
+		<div class="spinner" aria-hidden="true"></div>
+		<div class="text">
+		  <div class="title">Generating spectrogram</div>
+		  <div class="msg">Processing image — this may take a few seconds.</div>
+		  <div class="meta" id="waitOverlayMeta" style="display:none"><span id="waitOverlayETA"></span></div>
+		</div>
+	  </div>
+	</div>
+
+
   <div id="viewportWrapper" role="region" aria-label="Spectrogram viewport">
     <canvas id="axisCanvas" width="70" height="420" role="img" aria-label="Frequency axis"></canvas>
     <div id="scrollArea">
@@ -220,6 +234,30 @@
     if (!wrap.dataset.mode) setMode('create', { silent: true });
   })();
   </script>
+
+	<script>
+	(function wireCancelOnModeSwitch() {
+	  const wrap = document.getElementById('createEditToggle');
+	  if (!wrap) return;
+
+	  wrap.addEventListener('mode-change', (ev) => {
+		try {
+		  const mode = ev && ev.detail && ev.detail.mode;
+		  if (mode === 'edit') {
+			// Broadcast event for modules to listen
+			window.dispatchEvent(new CustomEvent('cancel-pending-create', { detail: { reason: 'mode-switch' }, bubbles: true }));
+			// Also call direct API if available
+			if (typeof window.__cancelPendingCreate === 'function') {
+			  try { window.__cancelPendingCreate(); } catch (e) { console.warn('__cancelPendingCreate threw', e); }
+			}
+		  }
+		} catch (err) { console.error('mode-change cancel handler', err); }
+	  }, false);
+	})();
+	</script>
+
+
+
 
   <!-- create_annotations must load after toggle is wired -->
   <script src="create_annotations.js"></script>
