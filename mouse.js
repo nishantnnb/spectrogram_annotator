@@ -113,53 +113,6 @@
     return { timeSec, freqHz, localX, localY, globalX, pxPerSec };
   }
 
-  // Draw ticks on xAxisOverlay using authoritative pxPerSec
-  function drawTicksLocal() {
-    const pxPerSec = (globalThis._spectroMap && typeof globalThis._spectroMap.pxPerSec === 'function')
-      ? globalThis._spectroMap.pxPerSec()
-      : ((typeof globalThis._spectroPxPerSec === 'number' && globalThis._spectroPxPerSec>0) ? globalThis._spectroPxPerSec : ((globalThis._spectroPxPerFrame && globalThis._spectroFramesPerSec) ? globalThis._spectroPxPerFrame * globalThis._spectroFramesPerSec : 1));
-
-    const viewWidth = Math.max(1, scrollArea.clientWidth);
-    const leftCol = Math.round(scrollArea.scrollLeft || 0);
-    const leftTime = leftCol / Math.max(1, pxPerSec);
-
-    xAxisCanvas.style.width = viewWidth + 'px';
-    xAxisCanvas.style.height = '28px';
-    xAxisCanvas.width = Math.round(viewWidth * dpr);
-    xAxisCanvas.height = Math.round(28 * dpr);
-    xAxisCtx.setTransform(dpr, 0, 0, dpr, 0, 0);
-
-    xAxisCtx.clearRect(0, 0, viewWidth, 28);
-    xAxisCtx.fillStyle = '#111';
-    xAxisCtx.fillRect(0, 0, viewWidth, 28);
-
-    xAxisCtx.lineWidth = Math.max(1 / dpr, 0.6);
-    xAxisCtx.strokeStyle = '#888';
-    xAxisCtx.fillStyle = '#ddd';
-    xAxisCtx.font = '12px sans-serif';
-    xAxisCtx.textBaseline = 'top';
-    xAxisCtx.textAlign = 'center';
-
-    const secondsVisible = viewWidth / pxPerSec;
-    const niceSteps = [0.1,0.2,0.5,1,2,5,10,15,30,60,120];
-    let step = niceSteps[0];
-    for (let v of niceSteps) { if (v * pxPerSec >= 60) { step = v; break; } step = v; }
-
-    const rightTime = leftTime + secondsVisible;
-    const firstTick = Math.floor(leftTime / step) * step;
-
-    for (let t = firstTick; t <= rightTime + 1e-9; t += step) {
-      const cxFloat = (t - leftTime) * pxPerSec;
-      const cx = Math.round(cxFloat) + 0.5;
-      xAxisCtx.beginPath();
-      xAxisCtx.moveTo(cx, 2);
-      xAxisCtx.lineTo(cx, 10);
-      xAxisCtx.stroke();
-      const label = (t >= 60) ? ((t / 60).toFixed(0) + 'm') : (t.toFixed((step < 1) ? 1 : 0) + 's');
-      xAxisCtx.fillText(label, Math.round(cxFloat), 10);
-    }
-  }
-
   // --- Crosshair drawing utilities ---
   function resizeOverlay() {
     // overlay should cover the spectrogramCanvas area inside viewportWrapper
@@ -237,28 +190,55 @@
     return { x, y, specRectLeft: specRect.left, specRectTop: specRect.top };
   }
 
-  // --- Wheel -> horizontal scroll ---
-  // Convert vertical wheel motion into horizontal scroll while pointer is over spectrogramCanvas.
-  spectrogramCanvas.addEventListener('wheel', function (ev) {
-    // prefer deltaMode handling: DOM_DELTA_PIXEL (0), LINE (1), PAGE (2)
-    // We'll normalize to pixels and scale.
-    let deltaY = ev.deltaY;
-    if (ev.deltaMode === 1) { // lines
-      deltaY *= 16; // approximate line height
-    } else if (ev.deltaMode === 2) { // pages
-      deltaY *= window.innerHeight;
+  // --- Combined capture-phase wheel handler for Create + Edit modes ---
+  (function installUnifiedWheelHandler() {
+    if (!scrollArea || !spectrogramCanvas) return;
+    const EDIT_LAYER_ID = 'editPointerLayer'; // existing edit overlay id
+    const OVERLAY_OPT_OUT_ATTR = 'data-allow-wheel'; // overlay can set this to opt out
+
+    function onWheelCapture(ev) {
+      // Quick bounding check: only care when pointer is inside spectrogram rectangle
+      const r = spectrogramCanvas.getBoundingClientRect();
+      if (ev.clientX < r.left || ev.clientX > r.right || ev.clientY < r.top || ev.clientY > r.bottom) return;
+
+      // Topmost element under pointer may opt out explicitly
+      const top = document.elementFromPoint(ev.clientX, ev.clientY);
+      if (top && top.closest && top.closest('[' + OVERLAY_OPT_OUT_ATTR + ']')) {
+        return; // let overlay handle wheel normally
+      }
+
+      // Normalize delta to pixels
+      let deltaY = ev.deltaY;
+      if (ev.deltaMode === 1) deltaY *= 16;
+      else if (ev.deltaMode === 2) deltaY *= window.innerHeight;
+
+      const SCROLL_FACTOR = 3;
+
+      // If edit overlay exists, forward and swallow to avoid dead zones
+      const editLayer = document.getElementById(EDIT_LAYER_ID);
+      if (editLayer) {
+        scrollArea.scrollLeft += deltaY * SCROLL_FACTOR;
+        ev.preventDefault();
+        ev.stopPropagation();
+        return;
+      }
+
+      // Create/default: forward but don't stop propagation (preserve other handlers)
+      scrollArea.scrollLeft += deltaY * SCROLL_FACTOR;
+      ev.preventDefault();
     }
-    const SCROLL_FACTOR = 1.2; // tune to taste
-    scrollArea.scrollLeft += deltaY * SCROLL_FACTOR;
-    ev.preventDefault();
-  }, { passive: false });
+
+    window.addEventListener('wheel', onWheelCapture, { passive: false, capture: true });
+    window.__unifiedWheelHandler = { remove: () => window.removeEventListener('wheel', onWheelCapture, true) };
+  })();
 
   // Mirror wheel listener on overlay so future toggles of pointer-events won't break behaviour
+  // (overlay is visual-only; this keeps previous behavior if overlay had pointer-events toggled)
   overlay.addEventListener('wheel', function (ev) {
     let deltaY = ev.deltaY;
     if (ev.deltaMode === 1) deltaY *= 16;
     else if (ev.deltaMode === 2) deltaY *= window.innerHeight;
-    const SCROLL_FACTOR = 1.2;
+    const SCROLL_FACTOR = 3;
     scrollArea.scrollLeft += deltaY * SCROLL_FACTOR;
     ev.preventDefault();
   }, { passive: false });
@@ -272,7 +252,7 @@
     resizeOverlay();
     const pos = clientToOverlayLocal(ev);
     drawCrosshairAtCanvasCoords(pos.x, pos.y);
-    drawTicksLocal();
+    // ticks handled by playback.js
   }
 
   function onLeave() {
@@ -289,8 +269,6 @@
     const { timeSec, freqHz } = computeAxisValues(ev.clientX, ev.clientY);
     // If other code expects mouseReadout's value, we keep it hidden but updated.
     readout.textContent = `X: ${formatTimeLabel(timeSec)}   Y: ${formatFreqLabel(freqHz)}`;
-
-    drawTicksLocal();
   }
 
   spectrogramCanvas.addEventListener('mouseenter', onEnter);
@@ -298,22 +276,21 @@
   spectrogramCanvas.addEventListener('mousemove', onMove);
   spectrogramCanvas.addEventListener('pointermove', onMove);
 
-  // Keep ticks and overlay synchronized during scroll/resize
+  // Keep overlay synchronized during scroll/resize
   scrollArea.addEventListener('scroll', () => {
-    drawTicksLocal();
-    // crosshair remains positioned relative to spectrogram; no change required other than redraw
     if (inside) {
       // force redraw overlay geometry because scroll may shift visible area
       resizeOverlay();
     }
+    // playback.js handles axis redraw on scroll
   }, { passive: true });
 
   window.addEventListener('resize', () => {
-    drawTicksLocal();
     resizeOverlay();
+    // playback.js handles axis redraw on resize
   });
 
-  // Initial sync
-  setTimeout(() => { drawTicksLocal(); resizeOverlay(); }, 120);
+  // Initial sync: size overlay (do not draw ticks here)
+  setTimeout(() => { resizeOverlay(); }, 120);
 
 })();
